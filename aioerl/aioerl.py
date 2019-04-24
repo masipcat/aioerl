@@ -38,7 +38,7 @@ class ErlProcess(asyncio.Task):
 
     def __repr__(self):
         if self.link:
-            return f"<ErlProc:{id(self)} linked:{self.link.pid}>"
+            return f"<ErlProc:{id(self)} linked:{id(self.link)}>"
         return f"<ErlProc:{id(self)}>"
 
     async def _send(self, internal_event, msg, from_process=None):
