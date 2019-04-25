@@ -1,8 +1,10 @@
 import asyncio
-import async_timeout
 import re
 from dataclasses import dataclass
-from typing import Any, Tuple
+from typing import Any
+from typing import Tuple
+
+import async_timeout
 
 
 @dataclass
@@ -98,6 +100,34 @@ async def receive(timeout=None, process=None) -> Message:
     process = process or this_process()
     proc, (event, body) = await process._receive(timeout)
     return Message(proc, event, body)
+
+
+async def receive_or_fail(
+    wait_for_events, ignore_events=None, sender=None, timeout=None, process=None, **kwargs
+):
+    if isinstance(wait_for_events, str):
+        wait_for_events = (wait_for_events,)
+    ignore_events = ignore_events or tuple()
+    check_body = "body" in kwargs
+
+    def _fail(m):
+        if m.is_exit:
+            raise Exception(str(m))
+        elif m.is_timeout:
+            raise asyncio.TimeoutError()
+        elif m.is_err:
+            raise m.body
+        else:
+            raise Exception(str(m))
+
+    m = await receive(timeout=timeout, process=process)
+    if m.event not in wait_for_events and m.event not in ignore_events:
+        _fail(m)
+    if check_body and m.body != kwargs["body"]:
+        _fail(m)
+    if sender and m.sender != sender:
+        _fail(m)
+    return m
 
 
 async def send(dest_process, msg):
