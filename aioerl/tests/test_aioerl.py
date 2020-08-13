@@ -1,16 +1,12 @@
+from aioerl import current_proc
+from aioerl import receive
+from aioerl import reply
+from aioerl import send
+from aioerl import spawn
+from aioerl import spawn_link
+
 import asyncio
 import pytest
-
-
-from aioerl import (
-    spawn_monitored,
-    spawn_link,
-    reply,
-    get,
-    receive,
-    send,
-    process_factory,
-)
 
 
 @pytest.mark.asyncio
@@ -23,7 +19,7 @@ async def test_ping_pong():
             else:
                 raise Exception("Invalid message body")
 
-    p = await spawn_monitored(ping_pong())
+    p = await spawn(ping_pong())
 
     await send(p, "ping")
     m = await receive()
@@ -39,7 +35,7 @@ async def test_timeout():
     async def ping_pong_unresponsive():
         await asyncio.sleep(100)
 
-    p = await spawn_monitored(ping_pong_unresponsive())
+    p = await spawn(ping_pong_unresponsive())
     await send(p, "ping")
     msg = await receive(timeout=0.1)
     assert msg.is_timeout
@@ -51,7 +47,7 @@ async def test_process_crashes():
         await receive()
         raise Exception("i'm dead")
 
-    p = await spawn_monitored(process_crashed())
+    p = await spawn(process_crashed())
     await send(p, "ping")
 
     m = await receive()
@@ -72,7 +68,7 @@ async def test_fetch():
 
     urls = ["http://erlang.org", "https://python.org/", "https://gitlab.com"]
     for url in urls:
-        p = await spawn_monitored(fetch())
+        p = await spawn(fetch())
         await send(p, url)
 
     results = {}
@@ -91,7 +87,7 @@ async def test_noproc():
     async def dummy():
         await receive()  # waiting for a message before terminate
 
-    p = await spawn_monitored(dummy())
+    p = await spawn(dummy())
 
     await send(p, "hey you!")
     m = await receive()
@@ -111,9 +107,7 @@ async def test_task_cancelled():
     async def dummy():
         await asyncio.sleep(1)
 
-    p = await spawn_monitored(dummy())
-    # avoid RuntimeWarning: coroutine 'test_task_cancelled.<locals>.dummy' was never awaited
-    await asyncio.sleep(0.1)
+    p = await spawn(dummy())
     assert p.kill() == True
 
     m = await receive()
@@ -136,9 +130,43 @@ async def test_process_link():
 @pytest.mark.asyncio
 async def test_process_link_crashes():
     async def dummy():
+        await asyncio.sleep(0.1)
         raise Exception("bye")
 
-    await spawn_link(dummy())
+    child = await spawn_link(dummy())
+    parent = current_proc()
+    assert parent.link is child
     m = await receive()
     assert m.is_err
     assert str(m.body) == "bye"
+    assert parent.link is None
+
+
+@pytest.mark.asyncio
+async def test_multiple_childs():
+    async def multi(n):
+        while m := await receive():
+            if m.body == "finish":
+                break
+            await reply(m.body * n)
+
+    for i in range(3):
+        await spawn(multi(1 + i))
+
+    parent = current_proc()
+    for child in parent.children:
+        await send(child, 1)
+
+    results = {
+        m.body
+        for _ in range(len(parent.children))
+        for m in [await receive()]
+        if m.is_ok
+    }
+    assert results == {1, 2, 3}
+
+    for child in parent.children:
+        await send(child, "finish")
+
+    await asyncio.sleep(0.1)  # wait until finish
+    assert parent.children == []
